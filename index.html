@@ -1,0 +1,298 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AR Explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- MindAR Library -->
+  <script src="./libs/mindar/mindar-image-three.prod.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      width: 100%;
+      font-family: Arial, sans-serif;
+    }
+
+    .mindar-container {
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #ui-buttons {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 10px;
+    }
+
+    #ui-buttons button {
+      padding: 15px 25px;
+      font-size: 18px;
+      background: #33691e;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
+    #ui-buttons button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- AR control buttons -->
+  <div id="ui-buttons">
+    <button id="start-ar-engine-button">Start AR</button>
+    <button id="stop-ar-engine-button" disabled>Stop AR</button>
+  </div>
+
+  <!-- AR camera and content -->
+  <div id="ar-ui" class="mindar-container"></div>
+
+  <script type="module">
+
+    import { loadGLTF, loadAudio } from "./libs/loader.js";
+
+    const THREE = window.MINDAR.IMAGE.THREE;
+
+    const arUI = document.getElementById("ar-ui");
+    const startButton = document.getElementById("start-ar-engine-button");
+    const stopButton = document.getElementById("stop-ar-engine-button");
+
+    let mindarThree = null;
+    let isStarted = false;
+    let isBusy = false;
+
+    // Keep references to sounds for stopping AR
+    const sounds = [];
+
+
+    // ==========================================
+    // 1. CREATE AN AR EXPERIENCE
+    // ==========================================
+
+    // Connect a target with a 3D model and a sound.
+
+    const createExperience = async (
+      modelPath,
+      anchorIndex,
+      listener,
+      audioPath,
+      scaleVector
+    ) => {
+
+      // Load the 3D model
+      const model = await loadGLTF(modelPath);
+
+      // Set model size and position
+      model.scene.scale.copy(scaleVector);
+      model.scene.position.set(0, 0, 0);
+
+      // Attach model to the corresponding target
+      const anchor = mindarThree.addAnchor(anchorIndex);
+      anchor.group.add(model.scene);
+
+      // Load sound
+      const audioBuffer = await loadAudio(audioPath);
+
+      const audio = new THREE.PositionalAudio(listener);
+      audio.setBuffer(audioBuffer);
+      audio.setRefDistance(100);
+      audio.setLoop(true);
+      audio.setVolume(0.8); // Volume: 0 to 1
+
+      anchor.group.add(audio);
+      sounds.push(audio);
+
+      // Play sound when the target is detected
+      anchor.onTargetFound = () => {
+        if (isStarted && !audio.isPlaying) {
+          audio.play();
+        }
+      };
+
+      // Pause sound when the target is lost
+      anchor.onTargetLost = () => {
+        if (audio.isPlaying) {
+          audio.pause();
+        }
+      };
+    };
+
+
+    // ==========================================
+    // 2. SET UP AR AND THE THREE TARGETS
+    // ==========================================
+
+    const setupAR = async () => {
+
+      mindarThree = new window.MINDAR.IMAGE.MindARThree({
+        container: arUI,
+        imageTargetSrc: "./assets/targets/target.mind"
+      });
+
+      const { scene, camera } = mindarThree;
+
+      // Scene lighting
+      const light = new THREE.HemisphereLight(
+        0xffffff, 0xbbbbff, 1
+      );
+      scene.add(light);
+
+      // Audio listener attached to the camera
+      const listener = new THREE.AudioListener();
+      camera.add(listener);
+
+
+      // ----------------------------------------
+      // TARGET 0
+      // ----------------------------------------
+
+      await createExperience(
+        "./assets/models/model1/scene.gltf",
+        0,
+        listener,
+        "./assets/sounds/sound1.mp3",
+        new THREE.Vector3(0.2, 0.2, 0.2)
+      );
+
+
+      // ----------------------------------------
+      // TARGET 1
+      // ----------------------------------------
+
+      await createExperience(
+        "./assets/models/listener/scene.gltf",
+        1,
+        listener,
+        "./assets/sounds/sound2.mp3",
+        new THREE.Vector3(0.2, 0.2, 0.2)
+      );
+
+
+      // ----------------------------------------
+      // TARGET 2
+      // ----------------------------------------
+
+      await createExperience(
+        "./assets/models/nemesis/scene.gltf",
+        2,
+        listener,
+        "./assets/sounds/sound3.mp3",
+        new THREE.Vector3(1.3, 1.3, 1.3)
+      );
+    };
+
+
+    // ==========================================
+    // 3. START AR
+    // ==========================================
+
+    const startAR = async () => {
+
+      if (isStarted || isBusy) return;
+
+      isBusy = true;
+      startButton.disabled = true;
+
+      try {
+
+        // Create the AR scene only once
+        if (!mindarThree) {
+          await setupAR();
+        }
+
+        // Start camera and target recognition
+        await mindarThree.start();
+
+        isStarted = true;
+
+        const { renderer, scene, camera } = mindarThree;
+
+        // Render the AR scene continuously
+        renderer.setAnimationLoop(() => {
+          renderer.render(scene, camera);
+        });
+
+        stopButton.disabled = false;
+
+      } catch (error) {
+
+        console.error("AR start error:", error);
+        alert("Unable to start AR. Check camera permissions and files.");
+
+        startButton.disabled = false;
+
+      } finally {
+        isBusy = false;
+      }
+    };
+
+
+    // ==========================================
+    // 4. STOP AR
+    // ==========================================
+
+    const stopAR = async () => {
+
+      if (!isStarted || isBusy) return;
+
+      isBusy = true;
+      stopButton.disabled = true;
+
+      try {
+
+        // Pause all playing sounds
+        sounds.forEach(audio => {
+          if (audio.isPlaying) {
+            audio.pause();
+          }
+        });
+
+        // Stop camera and target recognition
+        await mindarThree.stop();
+
+        // Stop rendering
+        mindarThree.renderer.setAnimationLoop(null);
+
+        isStarted = false;
+        startButton.disabled = false;
+
+      } catch (error) {
+
+        console.error("AR stop error:", error);
+        alert("Unable to stop AR.");
+
+      } finally {
+        isBusy = false;
+      }
+    };
+
+
+    // ==========================================
+    // 5. BUTTON EVENTS
+    // ==========================================
+
+    startButton.addEventListener("click", startAR);
+    stopButton.addEventListener("click", stopAR);
+
+  </script>
+
+</body>
+</html>
